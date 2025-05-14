@@ -95,9 +95,9 @@ Also, you may choose the serial port below for serial monitor output (CONSOLE).
 //  via 'File->Preferences->Full output during compile') - detailed steps here:  
 // https://wiki.ardumower.de/index.php?title=Ardumower_Sunray#SD_card_module
 // https://wiki.ardumower.de/index.php?title=Ardumower_Sunray#SD_card_logging
-//#define ENABLE_SD      1                 // enable SD card services (resuming, logging)? (uncomment to activate)
-//#define ENABLE_SD_LOG  1                 // enable SD card logging? uncomment to activate (not recommended - WARNING: may slow down system!)
-//#define ENABLE_SD_RESUME  1              // enable SD card map load/resume on reset? (uncomment to activate)
+#define ENABLE_SD      1                 // enable SD card services (resuming, logging)? (uncomment to activate)
+#define ENABLE_SD_LOG  1                 // enable SD card logging? uncomment to activate (not recommended - WARNING: may slow down system!)
+#define ENABLE_SD_RESUME  1              // enable SD card map load/resume on reset? (uncomment to activate)
 
 
 // ------ odometry -----------------------------------
@@ -193,7 +193,7 @@ Also, you may choose the serial port below for serial monitor output (CONSOLE).
 
 #define MOW_FAULT_CURRENT 8.0       // mowing motor fault current (amps)
 #define MOW_TOO_LOW_CURRENT 0.005   // mowing motor too low current (amps)
-#define MOW_OVERLOAD_CURRENT 2.0    // mowing motor overload current (amps)
+#define MOW_OVERLOAD_CURRENT 3.0    // mowing motor overload current (amps)
 
 // should the direction of mowing motor toggle each start? (yes: true, no: false)
 #define MOW_TOGGLE_DIR       true
@@ -293,8 +293,8 @@ Also, you may choose the serial port below for serial monitor output (CONSOLE).
 #define SONAR_RIGHT_OBSTACLE_CM  10      // stop mowing operation below this distance (cm) 
 
 // ------ rain sensor ----------------------------------------------------------
-//#define RAIN_ENABLE true                 // if activated, mower will dock when rain sensor triggers
-#define RAIN_ENABLE false
+#define RAIN_ENABLE true                 // if activated, mower will dock when rain sensor triggers
+//#define RAIN_ENABLE false
 
 // ------ time-of-flight distance sensor (VL53L0X) -----------------------------
 // do not use this sensor (not recommended)
@@ -307,9 +307,9 @@ Also, you may choose the serial port below for serial monitor output (CONSOLE).
 // see Wiki on how to install bumperduino or freewheel sensor:
 // https://wiki.ardumower.de/index.php?title=Bumper_sensor
 // https://wiki.ardumower.de/index.php?title=Free_wheel_sensor
-//#define BUMPER_ENABLE true
-#define BUMPER_ENABLE false
-#define BUMPER_INVERT false       // invert bumper sensor state? 
+#define BUMPER_ENABLE true
+//#define BUMPER_ENABLE false
+#define BUMPER_INVERT true       // invert bumper sensor state? 
 #define BUMPER_DEADTIME 1000  // linear motion dead-time (ms) after bumper is allowed to trigger
 #define BUMPER_TRIGGER_DELAY  0 // bumper must be active for (ms) to trigger
 #define BUMPER_MAX_TRIGGER_TIME 30  // if bumpersensor stays permanent triggered mower will stop with bumper error (time in seconds; 0 = disabled)
@@ -391,8 +391,8 @@ Also, you may choose the serial port below for serial monitor output (CONSOLE).
 #define ALLOW_ROUTE_OUTSIDE_PERI_METER 1.0   // max. distance (m) to allow routing from outside perimeter 
 // (increase if you get 'no map route' errors near perimeter)
 
-//#define OBSTACLE_DETECTION_ROTATION true // detect robot rotation stuck (requires IMU)
-#define OBSTACLE_DETECTION_ROTATION false   // NOTE: recommended to turn this off for slope environment   
+#define OBSTACLE_DETECTION_ROTATION true // detect robot rotation stuck (requires IMU)
+//#define OBSTACLE_DETECTION_ROTATION false   // NOTE: recommended to turn this off for slope environment   
 
 #define OBSTACLE_AVOIDANCE true   // try to find a way around obstacle
 //#define OBSTACLE_AVOIDANCE false  // stop robot on obstacle
@@ -452,10 +452,10 @@ Also, you may choose the serial port below for serial monitor output (CONSOLE).
 // ----- other options --------------------------------------------
 
 // button control (turns on additional features via the POWER-ON button)
-#define BUTTON_STOP    false      // use the stop/emergency button? (also required for additional button features)
+#define BUTTON_STOP    true      // use the stop/emergency button? (also required for additional button features)
 #define BUTTON_CONTROL true      // additional features activated (press-and-hold button for specific beep count: 
                                  //  1 beep=stop, 6 beeps=start, 5 beeps=dock, 3 beeps=R/C mode ON/OFF, 9 beeps=shutdown, 12 beeps=WiFi WPS
-#define BUTTON_CONTROL false   // additional features deactivated
+#define BUTTON_CONTROL true   // additional features deactivated
 #define BUTTON_INVERT false    // invert button sensor?
 
 //#define USE_TEMP_SENSOR true  // only activate if temp sensor (htu21d) connected

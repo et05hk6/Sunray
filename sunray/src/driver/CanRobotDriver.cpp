@@ -7,10 +7,16 @@
 #include "CanRobotDriver.h"
 #include "../../config.h"
 #include "../../ioboard.h"
+#include "../../config.h"
+#include "../../robot.h"
+#include "../../events.h"
 
 //#define COMM  ROBOT
 
 //#define DEBUG_CAN_ROBOT 1
+
+int MOW_MOTOR_NODE_IDS[] = { MOW1_MOTOR_NODE_ID, MOW2_MOTOR_NODE_ID, MOW3_MOTOR_NODE_ID, MOW4_MOTOR_NODE_ID, MOW5_MOTOR_NODE_ID  };
+
 
 void CanRobotDriver::begin(){
   CONSOLE.println("using robot driver: CanRobotDriver");
@@ -18,12 +24,14 @@ void CanRobotDriver::begin(){
   can.begin();
   encoderTicksLeft = 0;
   encoderTicksRight = 0;
-  encoderTicksMow = 0;
+  for (int i=0; i < MOW_MOTOR_COUNT; i++) {
+    encoderTicksMow[i] = 0;
+    mowCurr[i] = 0;
+  }
   chargeVoltage = 0;
   chargeCurrent = 0;  
   batteryVoltage = 28;
   cpuTemp = 30;
-  mowCurr = 0;
   motorLeftCurr = 0;
   motorRightCurr = 0;
   resetMotorTicks = true;
@@ -32,11 +40,16 @@ void CanRobotDriver::begin(){
   triggeredRightBumper = false;
   triggeredRain = false;
   triggeredStopButton = false;
+  triggeredPushboxStopButton = false;
   triggeredLift = false;
-  motorFault = false;
+  for (int i=0; i < MOW_MOTOR_COUNT; i++) mowFault[i] = false;
+  leftMotorFault = false;
+  rightMotorFault = false;
   mcuCommunicationLost = true;
   nextSummaryTime = 0;
-  nextConsoleTime = 0; 
+  nextCheckErrorTime = 0;
+  nextConsoleTime = 0;
+  nextMowTime = 0; 
   nextMotorTime = 0;
   nextTempTime = 0;
   nextWifiTime = 0;
@@ -48,8 +61,10 @@ void CanRobotDriver::begin(){
   cmdSummaryCounter = 0;
   consoleCounter = 0;
   requestLeftPwm = requestRightPwm = requestMowPwm = 0;
+  requestReleaseBrakesWhenZero = false;
   requestMowHeightMillimeter = 50;
   motorHeightAngleEndswitch = 0;
+  motorHeightAngleEndswitchSet = false;
   motorHeightAngleCurr = 0;
   motorHeightFoundEndswitch = false;
   robotID = "XX";
@@ -62,10 +77,16 @@ void CanRobotDriver::begin(){
   ledStateShutdown = false;
 
   #ifdef __linux__
-    CONSOLE.println("reading robot ID...");
     Process p;
-    p.runShellCommand("ip link show eth0 | grep link/ether | awk '{print $2}'");
-	  robotID = p.readString();    
+    p.runShellCommand("pwd");
+	  String workingDir = p.readString();    
+    CONSOLE.print("linux working dir (pwd): ");
+    CONSOLE.println(workingDir);
+
+    CONSOLE.println("reading robot ID...");
+    Process p2;
+    p2.runShellCommand("ip link show eth0 | grep link/ether | awk '{print $2}'");
+	  robotID = p2.readString();    
     robotID.trim();
     
   #endif
@@ -173,7 +194,7 @@ void CanRobotDriver::requestSummary(){
   canDataType_t data;
   data.floatVal = 0;
   
-  switch (cmdSummaryCounter % 4){
+  switch (cmdSummaryCounter % 7){
     case 0:
       sendCanData(OWL_CONTROL_MSG_ID, CONTROL_NODE_ID, can_cmd_request, owlctl::can_val_stop_button_state, data );  
       break;
@@ -186,36 +207,67 @@ void CanRobotDriver::requestSummary(){
     case 3:
       sendCanData(OWL_CONTROL_MSG_ID, CONTROL_NODE_ID, can_cmd_request, owlctl::can_val_rain_state, data );
       break;
+    case 4:
+      sendCanData(OWL_CONTROL_MSG_ID, CONTROL_NODE_ID, can_cmd_request, owlctl::can_val_charger_voltage, data );
+      break;
+    case 5:
+      sendCanData(OWL_CONTROL_MSG_ID, CONTROL_NODE_ID, can_cmd_request, owlctl::can_val_lift_state, data );
+      break;
+    case 6:
+      sendCanData(OWL_CONTROL_MSG_ID, CONTROL_NODE_ID, can_cmd_request, owlctl::can_val_slow_down_state, data );
+      break;
   }
   cmdSummaryCounter++;
 }
 
 
 // request MCU motor PWM
-void CanRobotDriver::requestMotorPwm(int leftPwm, int rightPwm, int mowPwm){
+void CanRobotDriver::requestMotorDrivePwm(int leftPwm, int rightPwm, bool requestReleaseBrakesWhenZero){
   canDataType_t data;
 
-  data.floatVal = ((float)leftPwm) / 255.0;  
-  sendCanData(OWL_DRIVE_MSG_ID, LEFT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_pwm_speed, data);  
+  if ((leftPwm == 0) && (requestReleaseBrakesWhenZero)){
+    data.byteVal[0] = 0;      
+    sendCanData(OWL_DRIVE_MSG_ID, LEFT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_motor_enable, data);
+  } else {
+    data.floatVal = ((float)leftPwm) / 255.0;  
+    sendCanData(OWL_DRIVE_MSG_ID, LEFT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_pwm_speed, data);  
+  }
   sendCanData(OWL_DRIVE_MSG_ID, LEFT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_odo_ticks, data);    
   
-  data.floatVal = ((float)rightPwm) / 255.0;    
-  sendCanData(OWL_DRIVE_MSG_ID, RIGHT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_pwm_speed, data);
+  if ((rightPwm == 0) && (requestReleaseBrakesWhenZero)){
+    data.byteVal[0] = 0;      
+    sendCanData(OWL_DRIVE_MSG_ID, RIGHT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_motor_enable, data);  
+  } else {
+    data.floatVal = ((float)rightPwm) / 255.0;    
+    sendCanData(OWL_DRIVE_MSG_ID, RIGHT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_pwm_speed, data);
+  }
   sendCanData(OWL_DRIVE_MSG_ID, RIGHT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_odo_ticks, data);    
+  cmdMotorCounter++;
+}
+
+
+void CanRobotDriver::requestMotorMowPwm(int mowPwm){
+  canDataType_t data;
 
   #ifdef MAX_MOW_RPM
     // cutter speed (velocity control)
     data.floatVal = ((float)mowPwm) / 255.0 * ((float)MAX_MOW_RPM)/60.0 * 3.1415*2.0;   // convert 0..255 to target velocity (motor radiant/sec)    
-    sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_velocity, data);
+    for (int i=0; i < MOW_MOTOR_COUNT; i++){
+      sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_IDS[i], can_cmd_set, owldrv::can_val_velocity, data);
+    }
   #else
     // cutter speed (voltage control)
-    data.floatVal = ((float)mowPwm) / 255.0;    
-    sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_pwm_speed, data);
+    data.floatVal = ((float)mowPwm) / 255.0;
+    for (int i=0; i < MOW_MOTOR_COUNT; i++){    
+      sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_IDS[i], can_cmd_set, owldrv::can_val_pwm_speed, data);
+    }
   #endif
-  sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_odo_ticks, data);
- 
-  cmdMotorCounter++;
+
+  for (int i=0; i < MOW_MOTOR_COUNT; i++){
+    sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_IDS[i], can_cmd_request, owldrv::can_val_odo_ticks, data);
+  }  
 }
+
 
 void CanRobotDriver::motorResponse(){
   cmdMotorResponseCounter++;
@@ -229,24 +281,69 @@ void CanRobotDriver::requestMowHeight(int mowHeightMillimeter){
   float heightMax = 90;  // max. allowed height   (60mm)
   float motorAnglePerMillimeter = 325;  // motor angles per millimeter (320)  
   mowHeightMillimeter = max(heightMin, min(mowHeightMillimeter, heightMax));  // limit to allowed min/max  
-  canDataType_t data;
-  if (motorHeightFoundEndswitch){    
+  canDataType_t data;  
+  if (motorHeightFoundEndswitch){
+    bool sendTarget = true;
+    if (!motorHeightAngleEndswitchSet) sendTarget = false;          
     // convert millimeter to motor angle radiant    
     data.floatVal = motorHeightAngleEndswitch - (((float)(heightEndSwitchMillimeter-mowHeightMillimeter)) * motorAnglePerMillimeter);  
+    float diff = abs(motorHeightAngleCurr - data.floatVal);    
+    if (diff < 400){
+      data.byteVal[0] = 0;
+      sendCanData(OWL_DRIVE_MSG_ID, MOW_HEIGHT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_motor_enable, data);        
+      sendTarget = false;
+    }     
+    if (sendTarget) {
+      CONSOLE.print("motorHeightAngleCurr=");
+      CONSOLE.print(motorHeightAngleCurr);
+      CONSOLE.print(",");
+      CONSOLE.print(" target=");
+      CONSOLE.print(data.floatVal);
+      CONSOLE.print(",");
+      CONSOLE.print(" diff=");      
+      CONSOLE.println(diff);
+    }
     //CONSOLE.print("endswitch found - requestMowHeight: ");
     //CONSOLE.print(data.floatVal);
     //CONSOLE.print("(");
     //CONSOLE.print(mowHeightMillimeter);
     //CONSOLE.println("mm)");    
+    if (sendTarget) sendCanData(OWL_DRIVE_MSG_ID, MOW_HEIGHT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_target, data);    
   } else {
-    data.floatVal = 10000 * motorAnglePerMillimeter;   // unreachable target (10mm) (find endswitch)   
-    CONSOLE.print("no endswitch found - requestMowHeight: ");
-    CONSOLE.println(data.floatVal);
+    if (!motorHeightAngleEndswitchSet){    
+      CONSOLE.println("finding endswitch");
+      data.floatVal = 10000 * motorAnglePerMillimeter;   // unreachable target (10mm) (find endswitch)   
+      //CONSOLE.print("no endswitch found - requestMowHeight: ");
+      //CONSOLE.println(data.floatVal);
+      sendCanData(OWL_DRIVE_MSG_ID, MOW_HEIGHT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_target, data);    
+      sendCanData(OWL_DRIVE_MSG_ID, MOW_HEIGHT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_endswitch, data);  
+    }
   }
-  sendCanData(OWL_DRIVE_MSG_ID, MOW_HEIGHT_MOTOR_NODE_ID, can_cmd_set, owldrv::can_val_target, data);  
   sendCanData(OWL_DRIVE_MSG_ID, MOW_HEIGHT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_angle, data);  
-  sendCanData(OWL_DRIVE_MSG_ID, MOW_HEIGHT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_endswitch, data);  
-} 
+}
+
+void CanRobotDriver::requestMotorErrorStatus(){
+  canDataType_t data;    
+  for (int i=0; i < MOW_MOTOR_COUNT; i++){
+    sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_IDS[i], can_cmd_request, owldrv::can_val_error, data);
+  }
+  sendCanData(OWL_DRIVE_MSG_ID, LEFT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_error, data);
+  sendCanData(OWL_DRIVE_MSG_ID, RIGHT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_error, data);
+}
+
+void CanRobotDriver::requestMotorMowCurrent(){
+  canDataType_t data;
+  for (int i=0; i < MOW_MOTOR_COUNT; i++){
+    sendCanData(OWL_DRIVE_MSG_ID, MOW_MOTOR_NODE_IDS[i], can_cmd_request, owldrv::can_val_total_current, data);
+  }  
+  sendCanData(OWL_DRIVE_MSG_ID, LEFT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_total_current, data);
+  sendCanData(OWL_DRIVE_MSG_ID, RIGHT_MOTOR_NODE_ID, can_cmd_request, owldrv::can_val_total_current, data);
+}
+
+void CanRobotDriver::requestPushboxState(){
+  canDataType_t data;
+  sendCanData(OWL_RECEIVER_MSG_ID, RECEIVER_PUSHBOX_NODE_ID, can_cmd_request, owlrecv::can_val_button_state, data);  
+}
 
 void CanRobotDriver::versionResponse(){
 }
@@ -274,20 +371,65 @@ void CanRobotDriver::processResponse(){
         data.byteVal[3] = frame.data[7];    
 
         switch (frame.can_id){
+          case OWL_RECEIVER_MSG_ID:
+            if (cmd == can_cmd_info){
+              switch (val){
+                case owlrecv::can_val_button_state:                  
+                  if (data.intValue != 0){
+                    CONSOLE.print("PUSHBOX: ");                   
+                    CONSOLE.println(data.intValue, BIN);                                      
+                    if (data.intValue == 1) setOperation(OP_MOW, false);
+                    if (data.intValue == 2) Logger.event(EVT_AUDIO_SHEEP);                    
+                    if (data.intValue == 4) setOperation(OP_DOCK, false);                                                          
+                    if (data.intValue == 8) setOperation(OP_IDLE, false);
+                    //if (data.intValue != 4){    // do not play any buzzer sound for pushbox STOP button
+                      buzzer.sound(SND_READY, true);
+                    //}
+                  }  
+                  //triggeredPushboxStopButton = (data.intValue == 4); // classic STOP button handling (pushbox STOP button simulates robot button)
+                  break;
+              }
+            }              
+            break;
           case OWL_DRIVE_MSG_ID:
             if (cmd == can_cmd_info){
                 //CONSOLE.println("can_cmd_info");                
                 // info value (volt, velocity, position, ...)
                 switch (val){                            
+                  case owldrv::can_val_error:
+                    for (int i=0; i < MOW_MOTOR_COUNT; i++){
+                      if (node.sourceAndDest.sourceNodeID == MOW_MOTOR_NODE_IDS[i]){
+                        mowFault[i] = (data.byteVal[0] != err_ok);                        
+                      }
+                    }
+                    switch(node.sourceAndDest.sourceNodeID){
+                      case LEFT_MOTOR_NODE_ID:
+                        leftMotorFault = (data.byteVal[0] != err_ok);
+                        break;
+                      case RIGHT_MOTOR_NODE_ID:
+                        rightMotorFault = (data.byteVal[0] != err_ok);
+                        break;
+                    }                    
+                    break;
+                  case owldrv::can_val_total_current:
+                    if (node.sourceAndDest.sourceNodeID == LEFT_MOTOR_NODE_ID) motorLeftCurr = data.floatVal;
+                    if (node.sourceAndDest.sourceNodeID == RIGHT_MOTOR_NODE_ID) motorRightCurr = data.floatVal;
+                    for (int i=0; i < MOW_MOTOR_COUNT; i++){
+                      if (node.sourceAndDest.sourceNodeID == MOW_MOTOR_NODE_IDS[i]){
+                        mowCurr[i] = data.floatVal;                        
+                      }
+                    }
+                    break;
                   case owldrv::can_val_endswitch:
                     switch(node.sourceAndDest.sourceNodeID){
                       case MOW_HEIGHT_MOTOR_NODE_ID:  
-                        if (data.byteVal[0] != 0){
-                          motorHeightFoundEndswitch = true;
-                          motorHeightAngleEndswitch = motorHeightAngleCurr; 
-                          //CONSOLE.print("found endswitch @angle ");
-                          //CONSOLE.println(motorHeightAngleEndswitch);
-                        }
+                        if (data.byteVal[0] != 0){                          
+                          if (!motorHeightFoundEndswitch){
+                            motorHeightFoundEndswitch = true;
+                            motorHeightFoundEndswitchTime = millis();
+                            CONSOLE.println("******   found endswitch");                                                                              
+                          }                                                
+                        } 
                         break;
                     }
                     break;
@@ -295,10 +437,26 @@ void CanRobotDriver::processResponse(){
                     switch(node.sourceAndDest.sourceNodeID){
                       case MOW_HEIGHT_MOTOR_NODE_ID:  
                         motorHeightAngleCurr = data.floatVal;
+                        if ((motorHeightFoundEndswitch) && (!motorHeightAngleEndswitchSet) && (millis() > motorHeightFoundEndswitchTime + 4000)){
+                          motorHeightAngleEndswitch= motorHeightAngleCurr; 
+                          motorHeightAngleEndswitchSet = true;
+                          CONSOLE.print("******   endswitch angle ");
+                          CONSOLE.println(motorHeightAngleCurr);           
+                        }                        
                         break;
                     }
                     break;
                   case owldrv::can_val_odo_ticks:
+                    for (int i=0; i < MOW_MOTOR_COUNT; i++){
+                      if (node.sourceAndDest.sourceNodeID == MOW_MOTOR_NODE_IDS[i]){
+                        encoderTicksMow[i] = data.ofsAndByte.ofsVal;                        
+                        //CONSOLE.print("mow encoder state ");
+                        //CONSOLE.print(i);                                                
+                        //CONSOLE.print(":");
+                        //CONSOLE.println(encoderTicksMow[i]);
+                        motorResponse();
+                      }
+                    }
                     switch(node.sourceAndDest.sourceNodeID){
                       case LEFT_MOTOR_NODE_ID:
                         //CONSOLE.println("encoderTicksLeft");
@@ -310,10 +468,6 @@ void CanRobotDriver::processResponse(){
                         break;
                       case RIGHT_MOTOR_NODE_ID:
                         encoderTicksRight = data.ofsAndByte.ofsVal;                        
-                        motorResponse();
-                        break;
-                      case MOW_MOTOR_NODE_ID:
-                        encoderTicksMow = data.ofsAndByte.ofsVal;
                         motorResponse();
                         break;
                     }                
@@ -345,6 +499,20 @@ void CanRobotDriver::processResponse(){
                 case owlctl::can_val_rain_state:
                   triggeredRain = (data.byteVal[0] != 0);
                   break;
+                case owlctl::can_val_slow_down_state:
+                  triggeredSlowDown = (data.byteVal[0] != 0);
+                  break;
+                case owlctl::can_val_lift_state:
+                  triggeredLift = (data.byteVal[0] != 0);
+                  break;
+                case owlctl::can_val_charger_voltage:
+                  float volt = data.floatVal;                  
+                  //CONSOLE.print("charger: ");
+                  //CONSOLE.println(volt);                                    
+                  if (volt > 1000) volt = volt / 1000.0;
+                  if (volt > 20) chargeVoltage = volt;
+                    else chargeVoltage = 0;            
+                  break;
               }
             }
             break;
@@ -358,22 +526,32 @@ void CanRobotDriver::run(){
   processResponse();
   if (millis() > nextMotorTime){
     nextMotorTime = millis() + 20; // 50 hz
-    while (can.available()){
+    /*while (can.available()){
       can_frame_t frame;
       can.read(frame);
-    }
+    }*/
     //CONSOLE.println(requestLeftPwm);
-    requestMotorPwm(requestLeftPwm, requestRightPwm, requestMowPwm);    
+    requestMotorDrivePwm(requestLeftPwm, requestRightPwm, requestReleaseBrakesWhenZero);        
   }
   if (millis() > nextSummaryTime){
     nextSummaryTime = millis() + 100; // 10 hz
     requestSummary();
   }
+  if (millis() > nextCheckErrorTime){
+    nextCheckErrorTime = millis() + 2000; // 0.5 hz
+    requestMotorErrorStatus();
+  }  
+  if (millis() > nextMowTime){
+    nextMowTime = millis() + 300;  // 3 hz      
+    requestMotorMowPwm(requestMowPwm);
+    requestPushboxState();
+  }
   if (millis() > nextConsoleTime){
     nextConsoleTime = millis() + 1000;  // 1 hz    
+    requestMotorMowCurrent();
     if (MOW_ADJUST_HEIGHT){   // can the mowing height be adjusted by an additional motor?
       requestMowHeight(requestMowHeightMillimeter);
-    }
+    }    
     bool printConsole = false;
     if (consoleCounter == 10){
       printConsole = true;
@@ -448,7 +626,7 @@ CanMotorDriver::CanMotorDriver(CanRobotDriver &sr): canRobot(sr){
 void CanMotorDriver::begin(){
   lastEncoderTicksLeft=0;
   lastEncoderTicksRight=0;
-  lastEncoderTicksMow=0;         
+  for (int i=0; i < MOW_MOTOR_COUNT; i++) lastEncoderTicksMow[i] = 0;
 }
 
 void CanMotorDriver::run(){
@@ -458,10 +636,17 @@ void CanMotorDriver::setMowHeight(int mowHeightMillimeter){
   canRobot.requestMowHeightMillimeter = mowHeightMillimeter;
 }
 
-void CanMotorDriver::setMotorPwm(int leftPwm, int rightPwm, int mowPwm){  
+void CanMotorDriver::setMotorPwm(int leftPwm, int rightPwm, int mowPwm, bool releaseBrakesWhenZero){  
+  //CONSOLE.print("CanMotorDriver::setMotorPwm ");  
+  //CONSOLE.print(leftPwm);
+  //CONSOLE.print(",");  
+  //CONSOLE.print(rightPwm);
+  //CONSOLE.print(",");  
+  //CONSOLE.println(mowPwm);
   //canRobot.requestMotorPwm(leftPwm, rightPwm, mowPwm);
   canRobot.requestLeftPwm = leftPwm;
   canRobot.requestRightPwm = rightPwm;
+  canRobot.requestReleaseBrakesWhenZero = releaseBrakesWhenZero;
   // Alfred mowing motor driver seem to start start mowing motor more successfully with full PWM (100%) values...  
   //if (mowPwm > 0) mowPwm = 255;
   //  else if (mowPwm < 0) mowPwm = -255;
@@ -469,17 +654,20 @@ void CanMotorDriver::setMotorPwm(int leftPwm, int rightPwm, int mowPwm){
 }
 
 void CanMotorDriver::getMotorFaults(bool &leftFault, bool &rightFault, bool &mowFault){
-  leftFault = canRobot.motorFault;
-  rightFault = canRobot.motorFault;
-  if (canRobot.motorFault){
-    CONSOLE.print("canRobot: motorFault (lefCurr=");
-    CONSOLE.print(canRobot.motorLeftCurr);
-    CONSOLE.print(" rightCurr=");
-    CONSOLE.print(canRobot.motorRightCurr);
-    CONSOLE.print(" mowCurr=");
-    CONSOLE.println(canRobot.mowCurr);
-  }
+  leftFault = canRobot.leftMotorFault;
+  rightFault = canRobot.rightMotorFault;
   mowFault = false;
+  if (MOW_MOTOR_COUNT > 0) mowFault = canRobot.mowFault[0];
+  for (int i=0; i < MOW_MOTOR_COUNT; i++) mowFault = (mowFault && canRobot.mowFault[i]);
+  if ( (mowFault) || (leftFault) || (rightFault) ){
+    CONSOLE.print("canRobot: motorFault (lefErr=");
+    CONSOLE.print(leftFault);
+    CONSOLE.print(" rightErr=");
+    CONSOLE.print(rightFault);
+    CONSOLE.print(" mowErr=");
+    CONSOLE.print(mowFault);
+    CONSOLE.println(")");
+  }
 }
 
 void CanMotorDriver::resetMotorFaults(){
@@ -495,10 +683,14 @@ void CanMotorDriver::getMotorCurrent(float &leftCurrent, float &rightCurrent, fl
   //mowCurrent = 0.8;
   leftCurrent = canRobot.motorLeftCurr;
   rightCurrent = canRobot.motorRightCurr;
-  mowCurrent = canRobot.mowCurr;
+  mowCurrent = 0;
+  for (int i=0; i < MOW_MOTOR_COUNT; i++){
+    mowCurrent = max(mowCurrent, canRobot.mowCurr[i]);
+  }
 }
 
 void CanMotorDriver::getMotorEncoderTicks(int &leftTicks, int &rightTicks, int &mowTicks){
+  //CONSOLE.println("getMotorEncoderTicks");    
   if (canRobot.mcuCommunicationLost) {
     //CONSOLE.println("getMotorEncoderTicks: no ticks!");    
     leftTicks = rightTicks = 0; mowTicks = 0;
@@ -509,23 +701,40 @@ void CanMotorDriver::getMotorEncoderTicks(int &leftTicks, int &rightTicks, int &
     //CONSOLE.println("getMotorEncoderTicks: resetMotorTicks");
     lastEncoderTicksLeft = canRobot.encoderTicksLeft;
     lastEncoderTicksRight = canRobot.encoderTicksRight;
-    lastEncoderTicksMow = canRobot.encoderTicksMow;
+    for (int i=0; i < MOW_MOTOR_COUNT; i++) lastEncoderTicksMow[i] = canRobot.encoderTicksMow[i];
   }
   leftTicks = (unsigned short)(canRobot.encoderTicksLeft - lastEncoderTicksLeft);
   rightTicks = (unsigned short)(canRobot.encoderTicksRight - lastEncoderTicksRight);
-  mowTicks = (unsigned short)(canRobot.encoderTicksMow - lastEncoderTicksMow);
-  if (leftTicks > 1000){
+  
+  int allMowTicks[MOW_MOTOR_COUNT];
+  mowTicks = 0; // 99999
+  //for (int i=0; i < 1; i++){  
+  for (int i=0; i < MOW_MOTOR_COUNT; i++){
+    allMowTicks[i] = (unsigned short)(canRobot.encoderTicksMow[i] - lastEncoderTicksMow[i]);
+    //CONSOLE.print("allMowTicks ");
+    //CONSOLE.print(i);
+    //CONSOLE.print(":");
+    //CONSOLE.println(allMowTicks[i]);
+    if (allMowTicks[i] > 5000) {
+      CONSOLE.println("CanMotorDriver::getMotorEncoderTicks resetting mowTicks");      
+      allMowTicks[i] = 0;
+    }
+    lastEncoderTicksMow[i] = canRobot.encoderTicksMow[i];
+    mowTicks = max(mowTicks, allMowTicks[i]);  // just consider one motor (with overall minimum ticks)  
+  }
+  //CONSOLE.print("mowTicks ");
+  //CONSOLE.println(mowTicks);  
+
+  if (leftTicks > 5000){
+    CONSOLE.println("CanMotorDriver::getMotorEncoderTicks resetting leftTicks");
     leftTicks = 0;
   }
-  if (rightTicks > 1000){
+  if (rightTicks > 5000){
+    CONSOLE.println("CanMotorDriver::getMotorEncoderTicks resetting rightTicks");
     rightTicks = 0;
   } 
-  if (mowTicks > 1000){
-    mowTicks = 0;
-  }
   lastEncoderTicksLeft = canRobot.encoderTicksLeft;
-  lastEncoderTicksRight = canRobot.encoderTicksRight;
-  lastEncoderTicksMow = canRobot.encoderTicksMow;
+  lastEncoderTicksRight = canRobot.encoderTicksRight;  
 }
 
 
@@ -643,7 +852,7 @@ void CanBumperDriver::run(){
 }
 
 bool CanBumperDriver::nearObstacle(){
-  return false;
+  return canRobot.triggeredSlowDown;
 }
 
 bool CanBumperDriver::obstacle(){
@@ -678,7 +887,7 @@ void CanStopButtonDriver::run(){
 }
 
 bool CanStopButtonDriver::triggered(){
-  return (canRobot.triggeredStopButton); 
+  return (canRobot.triggeredStopButton) || (canRobot.triggeredPushboxStopButton); 
 }
 
 // ------------------------------------------------------------------------------------

@@ -8,6 +8,9 @@
 # -start Sunray ROS LiDAR localization
 
 
+# test camera:  guvcview --device=/dev/video2 --format=mjpeg
+
+
 IMAGE_NAME="ros:melodic-perception-bionic"
 CONTAINER_NAME="ros1"
 
@@ -17,17 +20,31 @@ HOST_PCD_PATH=`realpath $PWD/../../PCD`
 #CONFIG_FILE="/root/Sunray/alfred/config_owlmower.h"
 #CONFIG_FILE="/root/Sunray/alfred/config_fuxtec_ros.h"
 USER_UID=$(id -u)
+BAG_FILE=/root/PCD/playback.bag
 
-SUNRAY_ROS_RVIZ=true
+MAP_RES="0.25"
+#MAP_RES="0.01"
+
+if [ -z "$SUNRAY_ROS_RVIZ" ]; then
+  SUNRAY_ROS_RVIZ=true
+fi
+
+if [ -z "$USE_BAG_FILE" ]; then
+  USE_BAG_FILE=false
+fi
 
 
-function export_ros_ip {
-  echo "export_ros_ip"
+function prepare_for_ros {
+  echo "prepare_for_ros"
   WCON=$(nmcli c | grep wifi | head -1 | tail -c 12 | xargs )
   echo "WIFI CON: $WCON"
   WIP=`ifconfig $WCON | grep 'inet ' | awk -F'[: ]+' '{ print $3 }'`
   echo "WIFI IP: $WIP"
-  export ROS_IP=`ifconfig $WCON | grep 'inet ' | awk -F'[: ]+' '{ print $3 }'`
+  if [[ $WIP != "" ]]; then
+    export ROS_IP=`ifconfig $WCON | grep 'inet ' | awk -F'[: ]+' '{ print $3 }'`
+  else
+    unset ROS_IP
+  fi
   # allow docker to access host Xserver 
   xhost +local:* 
 
@@ -41,13 +58,14 @@ function export_ros_ip {
   cat /proc/asound/cards
   # restart pulseaudio daemon as root
   #pulseaudio -k
-  killall pulseaudio
-  sleep 1
-  pulseaudio -D --system --disallow-exit --disallow-module-loading
+  #killall pulseaudio
+  #sleep 1
+  #pulseaudio -D --system --disallow-exit --disallow-module-loading
   #sudo chmod 666 /var/run/pulse/native
   #export PULSE_SERVER=unix:/var/run/pulse/native
   # set default volume 
-  amixer -D pulse sset Master 100%
+  #adduser root dialout audio pulse-access pulse
+  #amixer -D pulse sset Master 100%
   #   echo "====> we will test host audio now... (you should hear a voice)" 
   #   mplayer /home/pi/Sunray/tts/de/system_starting.mp3
   #exit
@@ -102,11 +120,9 @@ function docker_build_container {
   echo "IMAGE_NAME: $IMAGE_NAME"
   echo "DISPLAY: $DISPLAY"
   #exit
-  export_ros_ip  
+  prepare_for_ros  
   echo "====> enter 'exit' to exit docker container"   
   docker run --name=$CONTAINER_NAME -t -it --net=host --privileged -v /dev:/dev \
-    --env PULSE_SERVER=unix:/var/run/pulse/native \
-    --volume /var/run/pulse/native:/var/run/pulse/native \
     --volume /etc/machine-id:/etc/machine-id:ro \
     --volume /var/run/dbus:/var/run/dbus \
     --device /dev/snd \
@@ -139,9 +155,15 @@ function docker_terminal {
     exit
   fi
   # -------------continue container...---------------------
-  export_ros_ip
+  prepare_for_ros
+  CMD=". /ros_entrypoint.sh"
+  if [[ $WIP != "" ]]; then
+    CMD+="; export ROS_IP=$WIP"
+  fi
+  CMD+="; export DISPLAY=$DISPLAY"
+  CMD+="; export ROS_HOME=/root/Sunray/alfred ; cd /root/Sunray/ros ; . devel/setup.bash ; /bin/bash"
   docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME \
-    bash -c ". /ros_entrypoint.sh ; export ROS_IP=$WIP ; export ROS_HOME=/root/Sunray/alfred ; cd /root/Sunray/ros ; . devel/setup.bash ; /bin/bash"
+    bash -c "$CMD"
 }
 
 function docker_prepare_tools {
@@ -151,7 +173,7 @@ function docker_prepare_tools {
     exit
   fi  
   # -------------continue container...---------------------
-  export_ros_ip    
+  prepare_for_ros    
   docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME /root/Sunray/ros/install_tools.sh
 }
 
@@ -174,9 +196,29 @@ function ros_compile {
 
   # build single package:    catkin_make -DCATKIN_WHITELIST_PACKAGES="ground_lidar_processor"
   # build Sunray ROS node
-  export_ros_ip    
+  prepare_for_ros    
+  CMD=". /ros_entrypoint.sh ;"
+  CMD+="cd /root/Sunray/ros/ ;"
+  CMD+="rm -Rf build ; rm -Rf devel ;"
+  CMD+="catkin_make -DCONFIG_FILE=$CONFIG_PATHNAME -DROS_EDITION=ROS1 -DCMAKE_BUILD_TYPE=Release"
   docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME \
-    bash -c ". /ros_entrypoint.sh ; cd /root/Sunray/ros/ ; rm -Rf build ; rm -Rf devel ; catkin_make -DCONFIG_FILE=$CONFIG_PATHNAME -DROS_EDITION=ROS1"
+    bash -c "$CMD"
+}
+
+function ros_recompile {
+  echo "ros_recompile"
+  if [ "$EUID" -ne 0 ]
+    then echo "Please run as root (sudo)"
+    exit
+  fi 
+  # build single package:    catkin_make -DCATKIN_WHITELIST_PACKAGES="ground_lidar_processor"
+  # build Sunray ROS node
+  prepare_for_ros    
+  CMD=". /ros_entrypoint.sh ;"
+  CMD+="cd /root/Sunray/ros/ ;"
+  CMD+="catkin_make"
+  docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME \
+    bash -c "$CMD"
 }
 
 function rviz {
@@ -187,7 +229,7 @@ function rviz {
   #rviz -d src/direct_lidar_odometry/launch/dlo_mid360.rviz
   #rviz -d src/ground_lidar_processor/launch/test.rviz
   # allow docker to access host Xserver 
-  export_ros_ip
+  prepare_for_ros
   docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME \
     bash -c ". /ros_entrypoint.sh ; cd /root/Sunray/ros/ ; export DISPLAY=$DISPLAY ; export QT_QPA_PLATFORM=xcb ; rviz -d src/ground_lidar_processor/launch/test.rviz"
 }
@@ -223,6 +265,8 @@ function ros_start_mapping {
   echo "ros_start_mapping"
   export SUNRAY_ROS_MODE=MAPPING
   export SUNRAY_ROS_RVIZ=$SUNRAY_ROS_RVIZ
+  export USE_BAG_FILE=$USE_BAG_FILE
+  export BAG_FILE=$BAG_FILE
   sudo -E ./start_sunray_ros.sh
 }
 
@@ -233,9 +277,23 @@ function ros_stop_mapping {
       exit
     fi
     echo "ros_stop_mapping"
-    export_ros_ip
-    docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME \
-      bash -c "export ROS_IP=$WIP ; export ROS_HOME=/root/Sunray/alfred ; . /ros_entrypoint.sh ; cd /root/Sunray/ros ; . devel/setup.bash ; setcap 'cap_net_bind_service=+ep' devel/lib/sunray_node/sunray_node ; cd /root/Sunray/alfred ; pwd ; rosservice call /robot/dlio_map/save_pcd 0.25 /root/PCD ; ls -la /root/PCD"
+    prepare_for_ros
+
+    CMD=""    
+    if [[ $WIP != "" ]]; then
+      CMD+="export ROS_IP=$WIP"
+    fi
+    CMD+="; export ROS_HOME=/root/Sunray/alfred"
+    CMD+="; . /ros_entrypoint.sh"
+    CMD+="; cd /root/Sunray/ros"
+    CMD+="; . devel/setup.bash"
+    CMD+="; setcap 'cap_net_bind_service=+ep' devel/lib/sunray_node/sunray_node"
+    CMD+="; cd /root/Sunray/alfred"
+    CMD+="; pwd"
+    CMD+="; rosservice call /robot/dlio_map/save_pcd $MAP_RES /root/PCD"
+    CMD+="; ls -la /root/PCD"
+    docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME bash -c "$CMD"
+    
     docker stop $CONTAINER_NAME
 
     # rosservice call /robot/dlo_map/save_pcd LEAF_SIZE SAVE_PATH
@@ -254,16 +312,42 @@ function ros_stop_mapping {
 function ros_sunray {
   echo "ros_sunray"
   #export SUNRAY_ROS_MODE=SIMPLE
-  #export SUNRAY_ROS_MODE=LOCALIZATION
+  #export SUNRAY_ROS_MODE=LOCALIZATION  
   export SUNRAY_ROS_RVIZ=$SUNRAY_ROS_RVIZ
+  export USE_BAG_FILE=$USE_BAG_FILE
+  export BAG_FILE=$BAG_FILE
   sudo -E ./start_sunray_ros.sh
 }
 
 function ros_trigger_relocalization {
   echo "ros_trigger_relocalization"
-  export_ros_ip
+  prepare_for_ros
+  CMD=""
+  if [[ $WIP != "" ]]; then
+    CMD+="export ROS_IP=$WIP"
+  fi
+  CMD+="; export ROS_HOME=/root/Sunray/alfred"
+  CMD+="; . /ros_entrypoint.sh ; cd /root/Sunray/ros ; . devel/setup.bash"
+  CMD+="; setcap 'cap_net_bind_service=+ep' devel/lib/sunray_node/sunray_node"
+  CMD+="; cd /root/Sunray/alfred ; pwd ; rosservice call /global_localization ; rostopic echo /mcl_3dl/status"
   docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME \
-    bash -c "export ROS_IP=$WIP ; export ROS_HOME=/root/Sunray/alfred ; . /ros_entrypoint.sh ; cd /root/Sunray/ros ; . devel/setup.bash ; setcap 'cap_net_bind_service=+ep' devel/lib/sunray_node/sunray_node ; cd /root/Sunray/alfred ; pwd ; rosservice call /global_localization ; rostopic echo /mcl_3dl/status"
+    bash -c "$CMD"
+}
+
+function toggle_ros_ip {
+  if [ -z "$ROS_IP" ]; then
+    WCON=$(nmcli c | grep wifi | head -1 | tail -c 12 | xargs )
+    echo "WIFI CON: $WCON"
+    WIP=`ifconfig $WCON | grep 'inet ' | awk -F'[: ]+' '{ print $3 }'`
+    echo "WIFI IP: $WIP"
+    if [[ $WIP != "" ]]; then
+      echo "setting ROS_IP"
+      export ROS_IP=`ifconfig $WCON | grep 'inet ' | awk -F'[: ]+' '{ print $3 }'`
+    fi  
+  else
+    echo "unsetting ROS_IP"
+    unset ROS_IP
+  fi
 }
 
 
@@ -275,6 +359,13 @@ function toggle_rviz {
   fi
 }
 
+function toggle_use_bag_file {
+  if [[ "$USE_BAG_FILE" == "true" ]]; then
+    USE_BAG_FILE=false
+  else
+    USE_BAG_FILE=true
+  fi
+}
 
 function start_sunray_ros_service {
   if [ "$EUID" -ne 0 ]
@@ -325,6 +416,14 @@ function savelog(){
 
 function menu {
   echo "SUNRAY_ROS_RVIZ: $SUNRAY_ROS_RVIZ"
+  echo "USE_BAG_FILE: $USE_BAG_FILE"
+  echo "ROS_IP: $ROS_IP"
+  echo "HOME: $HOME"
+  echo "XDG_RUNTIME_DIR: $XDG_RUNTIME_DIR"
+  echo "HOST_SUNRAY_PATH: $HOST_SUNRAY_PATH"
+  echo "HOST_PCD_PATH: $HOST_PCD_PATH"  
+  echo "IMAGE_NAME: $IMAGE_NAME"
+  echo "DISPLAY: $DISPLAY"
   PS3='Please enter your choice: '
   options=(
       "Docker install"
@@ -334,7 +433,8 @@ function menu {
       "Docker create image from container"
       "Docker prepare ROS tools"
       "Docker run terminal"
-      "ROS compile"    
+      "ROS compile" 
+      "ROS recompile" 
       "rviz"
       "ROS test LiDAR"
       "ROS test ground bumper"    
@@ -343,6 +443,8 @@ function menu {
       "ROS run sunray"
       "ROS trigger re-localization"
       "toggle SUNRAY_ROS_RVIZ"
+      "toggle USE_BAG_FILE"
+      "toggle ROS_IP"
       "Start sunray ROS service"
       "Stop sunray ROS service"
       "Show sunray ROS service log"
@@ -383,6 +485,10 @@ function menu {
               ros_compile
               break
               ;;
+          "ROS recompile")
+              ros_recompile
+              break
+              ;;
           "rviz")
               rviz
               break
@@ -420,6 +526,16 @@ function menu {
               menu
               break
               ;;
+          "toggle USE_BAG_FILE")
+              toggle_use_bag_file
+              menu
+              break
+              ;;              
+          "toggle ROS_IP")
+              toggle_ros_ip
+              menu
+              break
+              ;;              
           "Start sunray ROS service")
               start_sunray_ros_service
               break

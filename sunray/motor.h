@@ -29,7 +29,8 @@ class Motor {
     bool motorLeftOverload; 
     bool motorRightOverload; 
     bool motorMowOverload; 
-    bool tractionMotorsEnabled;       
+    bool tractionMotorsEnabled; // allow traction motors to operate?
+    bool releaseBrakesWhenZero; // release eletrical brakes when zero speed?       
     bool enableMowMotor;
     bool motorMowForwardSet; 
     bool odometryError;    
@@ -56,6 +57,7 @@ class Motor {
     float motorLeftSenseLPNorm; 
     float motorRightSenseLPNorm;
     unsigned long motorMowSpinUpTime;
+    unsigned long motorReleaseBrakesTime;
     bool motorRecoveryState;    
     PID motorLeftPID;
     PID motorRightPID;    
@@ -67,6 +69,7 @@ class Motor {
     void plot();
     void enableTractionMotors(bool enable);
     void setLinearAngularSpeed(float linear, float angular, bool useLinearRamp = true);
+    void setReleaseBrakesWhenZero(bool release);
     void setMowState(bool switchOn);   
     void setMowMaxPwm( int val );
     void setMowHeightMillimeter( int val );

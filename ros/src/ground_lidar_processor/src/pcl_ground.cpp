@@ -59,7 +59,7 @@ public:
         obstacleNear = false;
         cloudReceived = false;
         pkg_loc = ros::package::getPath( ros::this_node::getName().substr(1) );
-        ROS_WARN("pkg_loc: %s\n", pkg_loc.c_str());                
+        //ROS_WARN("pkg_loc: %s\n", pkg_loc.c_str());                
     }
 
 
@@ -99,20 +99,21 @@ public:
 
     void publishObstacleState(int ground_points, int obstacle_points){
         if ((obstacleFar) || (obstacleNear)) {
-            ROS_WARN("obstacle_points: %d  ground_points: %d  far %d, near %d", 
-                obstacle_points, ground_points,
-                (int)obstacleFar, (int)obstacleNear );                        
             if (soundTimeout == 0){
-                std::string command = "killall mplayer; mplayer -volume 100 -af volume=5:1 ";
+                ROS_WARN("obstacle_points: %d  ground_points: %d  far %d, near %d", 
+                    obstacle_points, ground_points,
+                    (int)obstacleFar, (int)obstacleNear );                        
+
+                //std::string command = "../ros/scripts/dbus_send.sh -m Play -p ";
                 //std::string command = "mplayer -volume 100 -af volume=5:1 ";                
-                command += pkg_loc; 
-                if (obstacleNear){
-                    command += "/launch/tada.mp3";                
-                } else {
-                    command += "/launch/beep.mp3";                
-                }
-                command += " > /dev/null 2>&1 &";
-                system(command.c_str());
+                //command += pkg_loc; 
+                //if (obstacleNear){
+                //    command += "/launch/tada.mp3";                
+                //} else {
+                //    command += "/launch/beep.mp3";                
+                //}
+                //ROS_WARN("%s", command.c_str());
+                //system(command.c_str());
                 soundTimeout = 5;                
             }
         }
@@ -276,7 +277,7 @@ public:
                 }
             }
         }
-        if (obstacle_points->points.size() < 30){ // probably false positives
+        if (obstacle_points->points.size() < 60){ //  30 probably false positives
             obstacleNear = false;
             obstacleFar = false;
         }            

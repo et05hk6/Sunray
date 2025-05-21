@@ -92,7 +92,7 @@ void SimMotorDriver::setMowHeight(int mowHeightMillimeter){
 //      V     = (VR + VL) / 2       =>  VR = V + omega * L/2
 //      omega = (VR - VL) / L       =>  VL = V - omega * L/2
 
-void SimMotorDriver::setMotorPwm(int leftPwm, int rightPwm, int mowPwm){  
+void SimMotorDriver::setMotorPwm(int leftPwm, int rightPwm, int mowPwm, bool releaseBrakesWhenZero){  
 
   float deltaT = 0;
   if (lastSampleTime != 0){
@@ -588,6 +588,12 @@ void SimGpsDriver::setSimSolution(SolType sol){
 
 void SimGpsDriver::setSimGpsJump(bool flag){
   simGpsJump = flag;
+}
+
+void SimGpsDriver::send(const uint8_t *buffer, size_t size) {  
+}  
+
+void SimGpsDriver::sendRTCM(const uint8_t *buffer, size_t size){
 }
 
 

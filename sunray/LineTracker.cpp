@@ -46,7 +46,7 @@ void trackLine(bool runControl){
   if (stateOp == OP_DOCK) mow = false;
   float angular = 0;      
   float targetDelta = pointsAngle(stateX, stateY, target.x(), target.y());      
-  if (maps.trackReverse) targetDelta = scalePI(targetDelta + PI);
+  if (maps.trackReverse) targetDelta = scalePI(targetDelta + PI);  
   targetDelta = scalePIangles(targetDelta, stateDelta);
   trackerDiffDelta = distancePI(stateDelta, targetDelta);                         
   lateralError = distanceLineInfinite(stateX, stateY, lastTarget.x(), lastTarget.y(), target.x(), target.y());        
@@ -134,7 +134,7 @@ void trackLine(bool runControl){
 
     if (maps.trackSlow && trackslow_allowed) {
       // planner forces slow tracking (e.g. docking etc)
-      linear = 0.1;           
+      linear = DOCK_LINEAR_SPEED; // 0.1           
     } else if (     ((setSpeed > 0.2) && (maps.distanceToTargetPoint(stateX, stateY) < 0.5) && (!straight))   // approaching
           || ((linearMotionStartTime != 0) && (millis() < linearMotionStartTime + 3000))                      // leaving  
        ) 
@@ -143,11 +143,15 @@ void trackLine(bool runControl){
       //CONSOLE.println("SLOW: approach")
     } 
     else {
-      if (gps.solution == SOL_FLOAT){        
+      if ((stateLocalizationMode == LOC_GPS) && (gps.solution == SOL_FLOAT)){        
         linear = min(setSpeed, 0.1); // reduce speed for float solution
         //CONSOLE.println("SLOW: float");
       } else
         linear = setSpeed;         // desired speed
+      if (bumperDriver.nearObstacle()){
+        linear = 0.1;  // slow down near obstacles 
+        //CONSOLE.println("SLOW: BUMPER");      
+      }
       if (lidarBumper.nearObstacle()){
         linear = 0.1;  // slow down near obstacles 
         //CONSOLE.println("SLOW: LiDAR");      
@@ -161,10 +165,10 @@ void trackLine(bool runControl){
     if ( (motor.motorLeftOverload) || (motor.motorRightOverload) || (motor.motorMowOverload) ){
       if (!printmotoroverload) {
           Logger.event(EVT_MOTOR_OVERLOAD_REDUCE_SPEED);
-          CONSOLE.println("motor overload detected: reduce linear speed to 0.1");
+          CONSOLE.println("motor overload detected: reducing linear speed");
       }
       printmotoroverload = true;
-      linear = 0.1;  
+      linear = min(linear, MOTOR_OVERLOAD_SPEED);  
       //CONSOLE.println("SLOW: overload");
     } else {
       printmotoroverload = false;
@@ -193,32 +197,62 @@ void trackLine(bool runControl){
     //if (!SMOOTH_CURVES) angular = max(-PI/16, min(PI/16, angular)); 
   }
   // check some pre-conditions that can make linear+angular speed zero
-  if (fixTimeout != 0){
+  if ((stateLocalizationMode == LOC_GPS) && (fixTimeout != 0)){
     if (millis() > lastFixTime + fixTimeout * 1000.0){
       activeOp->onGpsFixTimeout();        
-    }       
+    }           
   }     
 
-  if ((gps.solution == SOL_FIXED) || (gps.solution == SOL_FLOAT)){        
-    if (abs(linear) > 0.06) {
-      if ((millis() > linearMotionStartTime + 5000) && (stateGroundSpeed < 0.03)){
-        // if in linear motion and not enough ground speed => obstacle
-        //if ( (GPS_SPEED_DETECTION) && (!maps.isUndocking()) ) { 
-        if (GPS_SPEED_DETECTION) {         
-          CONSOLE.println("gps no speed => obstacle!");
-          statMowGPSNoSpeedCounter++;
-          Logger.event(EVT_NO_GPS_SPEED_OBSTACLE);
-          triggerObstacle();
-          return;
+  if (stateLocalizationMode == LOC_GPS){
+    if  ((gps.solution == SOL_FIXED) || (gps.solution == SOL_FLOAT)){        
+      if (abs(linear) > 0.06) {
+        if ((millis() > linearMotionStartTime + 5000) && (stateGroundSpeed < 0.03)){
+          // if in linear motion and not enough ground speed => obstacle
+          //if ( (GPS_SPEED_DETECTION) && (!maps.isUndocking()) ) { 
+          if (GPS_SPEED_DETECTION) {         
+            CONSOLE.println("gps no speed => obstacle!");
+            statMowGPSNoSpeedCounter++;
+            Logger.event(EVT_NO_GPS_SPEED_OBSTACLE);
+            triggerObstacle();
+            return;
+          }
         }
+      }  
+    } else {
+      // no gps solution
+      if (REQUIRE_VALID_GPS){
+        CONSOLE.println("WARN: no gps solution!");
+        activeOp->onGpsNoSignal();
       }
-    }  
-  } else {
-    // no gps solution
-    if (REQUIRE_VALID_GPS){
-      CONSOLE.println("WARN: no gps solution!");
-      activeOp->onGpsNoSignal();
     }
+  }
+  if (stateLocalizationMode == LOC_APRIL_TAG){
+    if (!stateAprilTagFound){
+      linear = 0; // wait until april-tag found 
+      angular = 0; 
+    } else {
+      if (!buzzer.isPlaying()) buzzer.sound(SND_WARNING, true);
+      //linear = 0; // wait until april-tag found 
+      //angular = 0; 
+    }
+  }
+  if (stateLocalizationMode == LOC_REFLECTOR_TAG){
+    if (!stateReflectorTagFound){
+      linear = 0; // wait until reflector-tag found 
+      angular = 0; 
+    } else {
+      if (!buzzer.isPlaying()) buzzer.sound(SND_WARNING, true);
+      float maxAngular = 0.015;  // 0.02
+      float maxLinear = 0.05;      
+      angular =  max(min(1.0 * trackerDiffDelta, maxAngular), -maxAngular);
+      angular =  max(min(angular, maxAngular), -maxAngular);      
+      linear = 0.05;      
+      if (maps.trackReverse) linear = -0.05;   // reverse line tracking needs negative speed           
+    }
+  }
+  if (stateLocalizationMode == LOC_GUIDANCE_SHEET){
+      if (!buzzer.isPlaying()) buzzer.sound(SND_WARNING, true);
+      angular = 0;
   }
 
   // gps-jump/false fix check
@@ -235,8 +269,8 @@ void trackLine(bool runControl){
         if (dist < KIDNAP_DETECT_DISTANCE_DOCK_UNDOCK) {
             allowedPathTolerance = KIDNAP_DETECT_ALLOWED_PATH_TOLERANCE_DOCK_UNDOCK;
         }
-    }
-    if (fabs(distToPath) > allowedPathTolerance){ // actually, this should not happen (except on false GPS fixes or robot being kidnapped...)
+    }    
+    if ((stateLocalizationMode == LOC_GPS) && (fabs(distToPath) > allowedPathTolerance)){ // actually, this should not happen (except on false GPS fixes or robot being kidnapped...)
       if (!stateKidnapped){
         stateKidnapped = true;
         CONSOLE.print("KIDNAP_DETECT: stateKidnapped=");
@@ -279,21 +313,63 @@ void trackLine(bool runControl){
         langleToTargetFits = angleToTargetFits;
     }
 
+    #ifdef DOCK_REFLECTOR_TAG
+      if (stateLocalizationMode == LOC_REFLECTOR_TAG){             
+        CONSOLE.print("loc=");
+        if (stateLocalizationMode == LOC_APRIL_TAG) CONSOLE.print("april");
+        if (stateLocalizationMode == LOC_GPS) CONSOLE.print("gps");
+        if (stateLocalizationMode == LOC_GUIDANCE_SHEET) CONSOLE.print("guide");    
+        if (stateLocalizationMode == LOC_REFLECTOR_TAG) CONSOLE.print("reflector");        
+        CONSOLE.print(" tagFound=");
+        CONSOLE.print(stateReflectorTagFound);
+        CONSOLE.print(" tagOut=");
+        CONSOLE.print(stateReflectorTagOutsideFound);      
+        CONSOLE.print(" reflX=");
+        CONSOLE.print(stateXReflectorTag);
+        CONSOLE.print(" reflY=");
+        CONSOLE.print(stateYReflectorTag);
+        CONSOLE.print(" mow=");
+        CONSOLE.print(mow);      
+        CONSOLE.print(" shouldDock=");
+        CONSOLE.print(maps.shouldDock);      
+        CONSOLE.print(" trackRev=");
+        CONSOLE.print(maps.trackReverse);
+        CONSOLE.print(" lin=");
+        CONSOLE.print(linear);
+        CONSOLE.print(" ang=");
+        CONSOLE.print(angular);    
+        CONSOLE.print(" isBetwLNTLDockPt=");
+        CONSOLE.print(maps.isBetweenLastAndNextToLastDockPoint());
+        CONSOLE.print(" dockPtIdx=");
+        CONSOLE.print(maps.dockPointsIdx);
+        CONSOLE.print(" freePtIdx=");
+        CONSOLE.print(maps.freePointsIdx);
+        CONSOLE.print(" wayMode=");
+        if (maps.wayMode == WAY_DOCK) CONSOLE.print("WAY_DOCK");
+        if (maps.wayMode == WAY_MOW) CONSOLE.print("WAY_MOW");
+        if (maps.wayMode == WAY_FREE) CONSOLE.print("WAY_FREE");
+        CONSOLE.println();
+      }
+    #endif
+
     motor.setLinearAngularSpeed(linear, angular);      
     motor.setMowState(mow);    
   }
 
-  if (targetReached){
-    rotateLeft = false;
-    rotateRight = false;
-    activeOp->onTargetReached();
-    bool straight = maps.nextPointIsStraight();
-    if (!maps.nextPoint(false,stateX,stateY)){
-      // finish        
-      activeOp->onNoFurtherWaypoints();      
-    } else {      
-      // next waypoint          
-      //if (!straight) angleToTargetFits = false;      
+  //if (!maps.isTargetingLastDockPoint()){
+  if (stateLocalizationMode != LOC_REFLECTOR_TAG){
+    if (targetReached){
+      rotateLeft = false;
+      rotateRight = false;
+      activeOp->onTargetReached();
+      bool straight = maps.nextPointIsStraight();
+      if (!maps.nextPoint(false,stateX,stateY)){
+        // finish        
+        activeOp->onNoFurtherWaypoints();      
+      } else {      
+        // next waypoint          
+        //if (!straight) angleToTargetFits = false;      
+      }
     }
   }  
 }

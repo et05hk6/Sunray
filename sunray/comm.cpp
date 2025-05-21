@@ -165,6 +165,8 @@ void cmdControl(){
           if (intValue >= 0) motor.setMowMaxPwm(intValue);
       } else if (counter == 10){
           if (intValue >= 0) motor.setMowHeightMillimeter(intValue);
+      } else if (counter == 11){
+          if (intValue >= 0) dockAfterFinish = (intValue == 1);
       }
       counter++;
       lastCommaIdx = idx;
@@ -864,7 +866,7 @@ void cmdFirmwareUpdate(){
 }
 
 // process request
-void processCmd(bool checkCrc, bool decrypt){
+void processCmd(String channel, bool checkCrc, bool decrypt, bool verbose){
   cmdResponse = "";      
   if (cmd.length() < 4) return;
 #ifdef ENABLE_PASS
@@ -881,10 +883,13 @@ void processCmd(bool checkCrc, bool decrypt){
             cmd[i] = char(code);  
           }
         }
-        #ifdef VERBOSE
-          CONSOLE.print("decrypt:");
+        //#ifdef VERBOSE
+        if (verbose){  
+          CONSOLE.print(channel);
+          CONSOLE.print("(decrypt):");
           CONSOLE.println(cmd);
-        #endif
+        }
+        //#endif
       }
     } 
   }
@@ -893,7 +898,8 @@ void processCmd(bool checkCrc, bool decrypt){
   int idx = cmd.lastIndexOf(',');
   if (idx < 1){
     if (checkCrc){
-      CONSOLE.print("COMM CRC ERROR: ");
+      CONSOLE.print(channel);
+      CONSOLE.print(":COMM CRC ERROR: ");
       CONSOLE.println(cmd);
       return;
     }
@@ -906,7 +912,8 @@ void processCmd(bool checkCrc, bool decrypt){
     if ((simFaultyConn) && (simFaultConnCounter % 10 == 0)) crcErr = true;
     if ((expectedCrc != crc) && (checkCrc)) crcErr = true;      
     if (crcErr) {
-      CONSOLE.print("CRC ERROR");
+      CONSOLE.print(channel);
+      CONSOLE.print(":CRC ERROR");
       CONSOLE.print(crc,HEX);
       CONSOLE.print(",");
       CONSOLE.print(expectedCrc,HEX);
@@ -985,7 +992,7 @@ void processConsole(){
       if ((ch == '\r') || (ch == '\n')) {        
         CONSOLE.print("CON:");
         CONSOLE.println(cmd);
-        processCmd(false, false);              
+        processCmd("CON", false, false, false);              
         CONSOLE.print(cmdResponse);    
         cmd = "";
       } else if (cmd.length() < 500){

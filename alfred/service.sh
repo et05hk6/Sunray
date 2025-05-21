@@ -32,11 +32,13 @@ function build_sunray() {
   echo "selected: $CONFIG_FILE"
 
   CONFIG_PATHNAME=$PWD/$CONFIG_FILE
+  sudo rm ../sunray/config.h
   rm -f CMakeCache.txt
   rm -f cmake_install.cmake
   rm -Rf CMakeFiles
   cd build
-  rm -Rf . 
+  rm -Rf * 
+  #exit
   cmake -D CONFIG_FILE=$CONFIG_PATHNAME ..
   make 
 }
@@ -49,6 +51,21 @@ function rebuild_sunray() {
   fi
   cd build
   make
+}
+
+
+function install_sunray_alfred() {
+  if [ "$EUID" -eq 0 ]
+    then echo "Please run as non-root (not sudo)"
+    exit
+  fi
+  echo "NOTE: enter user password if being asked (see Sunray PDF manual for password)"
+  echo "stopping sunray service..."
+  sudo systemctl stop sunray
+  echo "installing executable..."
+  cp build/sunray ~/sunray_install/
+  echo "starting sunray service..."
+  sudo systemctl start sunray
 }
 
 
@@ -96,6 +113,9 @@ function start_sunray_service() {
   # enable sunray service
   echo "starting sunray service..."
   #ln -s /home/pi/sunray_install/config_files/sunray.service /etc/systemd/system/sunray.service
+  REPLACEPATH="/home/pi/Sunray/alfred"
+  sed "s+$REPLACEPATH+$PWD+g" <$PWD/config_files/sunray/sunray.service.example >$PWD/config_files/sunray/sunray.service
+
   cp $PWD/config_files/sunray/sunray.service /etc/systemd/system/sunray.service
   chmod 644 /etc/systemd/system/sunray.service
   mkdir -p /boot/sunray
@@ -118,6 +138,36 @@ function stop_sunray_service() {
   systemctl disable sunray
   echo "sunray service stopped!"
 }
+
+
+function start_sunray() {
+  if [ "$EUID" -ne 0 ]
+    then echo "Please run as root (sudo)"
+    exit
+  fi
+  echo "starting sunray... (press CTRL+C to stop)"
+  ./start_sunray.sh
+}
+
+function start_sunray_motor_test() {
+  if [ "$EUID" -ne 0 ]
+    then echo "Please run as root (sudo)"
+    exit
+  fi
+  echo "starting sunray... (press CTRL+C to stop)"
+  ./start_sunray.sh <<< "AT+E"
+}
+
+function start_sunray_sensor_test() {
+  if [ "$EUID" -ne 0 ]
+    then echo "Please run as root (sudo)"
+    exit
+  fi
+  echo "starting sunray... (press CTRL+C to stop)"  
+  ./start_sunray.sh <<< "AT+F"
+}
+
+
 
 function start_log_service(){
   if [ "$EUID" -ne 0 ]
@@ -155,7 +205,7 @@ function stop_dm(){
   service lightdm stop
 }
 
-function list(){
+function list_services(){
   if [ "$EUID" -ne 0 ]
     then echo "Please run as root (sudo)"
     exit
@@ -164,20 +214,30 @@ function list(){
   service --status-all
 }
 
-function showlog(){
-  echo "show log..."
+function show_log(){
+  echo "show log... (press CTRL+C to stop)"
   journalctl -f -u sunray
 }
 
-function savelog(){
+function save_log(){
   echo "saving log.txt..."
   journalctl -u sunray > log.txt
 }
 
+function clear_log(){
+  if [ "$EUID" -ne 0 ]
+    then echo "Please run as root (sudo)"
+    exit
+  fi
+  echo "clearing log..."
+  journalctl --rotate --vacuum-time=1s -u sunray
+}
+
 function kernel_log(){
-  echo "kernel log..."
+  echo "kernel log... (press CTRL+C to stop)"
   dmesg -wH
 }
+
 
 if [ ! -d "/etc/motion" ]; then
   echo installing motion...
@@ -194,81 +254,195 @@ fi
 #systemctl status motion
 
 
-# show menu
-PS3='Please enter your choice: '
-options=( 
-  "Build sunray executable" "Rebuild sunray executable"
-  "Start sunray service" "Stop sunray service" 
-  "Start camera service" "Stop camera service"
-  "Start logging service" "Stop logging service"
-  "Start display manager" "Stop display manager"   
-  "List services"   
-  "Show log" "Save log" "Kernel log"
-  "Quit")
-select opt in "${options[@]}"
-do
-    case $opt in
-        "Build sunray executable")
-            build_sunray
-            break
+compile_menu () {
+    echo "Compile and test menu (NOTE: press CTRL+C to stop any pending actions)"
+    options=(
+        "Build sunray executable (you can choose config file)" 
+        "Rebuild sunray executable (using last choosen config file)"
+        "Run sunray executable"
+        "Run sunray executable with motor test (WARNING: motors will start with full speed, jack-up your robot!)"
+        "Run sunray executable with sensor test"
+        "Back"
+    )
+    select option in "${options[@]}"; do
+        case $option in
+            ${options[0]})
+                build_sunray
+                break
             ;;
-        "Rebuild sunray executable")
-            rebuild_sunray
-            break
+            ${options[1]})
+                rebuild_sunray
+                break
             ;;
-        "Start sunray service")
-            start_sunray_service
-            break
+            ${options[2]})
+                start_sunray
+                break
             ;;
-        "Stop sunray service")
-            stop_sunray_service
-            break
-            ;;            
-        "Start camera service")
-            start_cam_service
-            break
+            ${options[3]})
+                start_sunray_motor_test
+                break
             ;;
-        "Stop camera service")
-            stop_cam_service
-            break
+            ${options[4]})
+                start_sunray_sensor_test
+                break
             ;;
-        "Start logging service")
-            start_log_service
-            break
+            ${options[5]})
+                return
+             ;;
+            *) 
+                echo invalid option
             ;;
-        "Stop logging service")
-            stop_log_service
-            break
+        esac
+    done
+}
+
+
+
+linux_services_menu () {
+    echo "Linux services menu (NOTE: press CTRL+C to stop any pending actions)"
+    options=(
+        "Install sunray executable on existing Alfred file system (Alfred-only)" 
+        "Start sunray service (as Linux autostart)"
+        "Stop sunray service"
+        "Start camera service (as Linux autostart)"
+        "Stop camera service"
+        "Start Linux logging service"
+        "Stop Linux logging service"
+        "Start display manager"
+        "Stop display manager"
+        "List services"
+        "Back"
+    )
+    select option in "${options[@]}"; do
+        case $option in
+            ${options[0]})
+                install_sunray_alfred
+                break
             ;;
-        "Start display manager")
-            start_dm
-            break
-            ;;                                        
-        "Stop display manager")
-            stop_dm
-            break
-            ;;                                        
-        "List services")
-            list
-            break
-            ;;                                        
-        "Show log")
-            showlog
-            break
-            ;;     
-        "Save log")
-            savelog
-            break
+            ${options[1]})
+                start_sunray_service
+                break
             ;;
-        "Kernel log")
-            kernel_log
-            break
-            ;;                                   
-        "Quit")
-            break
+            ${options[2]})
+                stop_sunray_service
+                break
             ;;
-        *) echo "invalid option $REPLY";;
-    esac
+            ${options[3]})
+                start_cam_service
+                break
+            ;;
+            ${options[4]})
+                stop_cam_service
+                break
+            ;;
+            ${options[5]})
+                start_log_service
+                break
+            ;;
+            ${options[6]})
+                stop_log_service
+                break
+            ;;
+            ${options[7]})
+                start_dm
+                break
+            ;;
+            ${options[8]})
+                stop_dm
+                break
+            ;;
+            ${options[9]})
+                list_services
+                break
+            ;;
+            ${options[10]})
+                return
+             ;;
+            *) 
+                echo invalid option
+            ;;
+        esac
+    done
+}
+
+
+
+linux_logging_menu () {
+    echo "Linux logging menu (NOTE: press CTRL+C to stop any pending actions)"
+    options=(
+        "Show log" 
+        "Save log"
+        "Clear log"
+        "Kernel log"
+        "Back"
+    )
+    select option in "${options[@]}"; do
+        case $option in
+            ${options[0]})
+                show_log
+                break
+            ;;
+            ${options[1]})
+                save_log
+                break
+            ;;
+            ${options[2]})
+                clear_log
+                break
+            ;;
+            ${options[3]})
+                kernel_log
+                break
+            ;;
+            ${options[4]})
+                return
+             ;;
+            *) 
+                echo invalid option
+            ;;
+        esac
+    done
+}
+
+
+
+main_menu () {
+    echo "Main menu (NOTE: press CTRL+C to stop any pending actions)"
+    options=(
+        "Compile and test menu"
+        "Linux services menu"
+        "Linux logging menu"
+        "Quit"
+    )
+    select option in "${options[@]}"; do
+        case $option in
+            ${options[0]})
+                compile_menu
+                break
+            ;;
+            ${options[1]})
+                linux_services_menu
+                break
+            ;;
+            ${options[2]})
+                linux_logging_menu
+                break
+             ;;
+            ${options[3]})
+                exit
+             ;;
+            *) 
+                echo invalid option
+            ;;
+        esac
+    done
+}
+
+
+# show main menu
+while true
+do 
+  main_menu
 done
 
 

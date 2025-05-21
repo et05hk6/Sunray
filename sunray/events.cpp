@@ -206,6 +206,22 @@ void EventLogger::event(EventCode evt, const String &additionalData) {
             case EVT_USER_UPLOAD_TIME_TABLE:
                 evtText = TXT_USER_UPLOAD_TIMETABLE;
                 break;
+            case EVT_AUDIO_TEST:
+                evtText = TXT_AUDIO_TEST;
+                break;
+            case EVT_AUDIO_SHEEP:
+                evtText = TXT_AUDIO_SHEEP;
+                break;
+            case EVT_AUDIO_BELL:
+                evtText = TXT_AUDIO_BELL;
+                break;
+            case EVT_AUDIO_BEEP:
+                evtText = TXT_AUDIO_BEEP;
+                break;
+            case EVT_AUDIO_TADA:
+                evtText = TXT_AUDIO_TADA;
+                break;
+
             default:
                 evtText = TXT_UNKNOWN;
                 break;
@@ -235,13 +251,13 @@ void EventLogger::playMP3(String &filename) {
     #ifdef __linux__        
         //String command = "killall mplayer; mplayer ";
         // volume 100% (-volume 100) and amplify by 5dB (-af volume=5:1)
-        String command = "killall mplayer; mplayer -volume 100 -af volume=5:1 ";
+        String command = "../ros/scripts/dbus_send.sh -m Play -p ";
         command += filename;
+        command += " &";
         //Process p;
-        CONSOLE.print("RUN: ");
-        CONSOLE.println(command.c_str());
+        //CONSOLE.print("RUN: ");
+        //CONSOLE.println(command.c_str());
         //p.runShellCommand(command.c_str());    
-        command += " > /dev/null 2>&1 &";
         system(command.c_str());
     #endif
 

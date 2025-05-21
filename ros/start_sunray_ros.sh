@@ -7,7 +7,7 @@ CONTAINER_NAME="ros1"
 
 echo "EUID=$EUID"
 echo "PWD=$PWD"
-
+WHOAMI=`whoami`
 
 
 if [ "$EUID" -ne 0 ]
@@ -31,10 +31,24 @@ if [[ `pidof sunray_node` != "" ]]; then
 fi
 
 
+# starting dbus monitor
+../ros/scripts/dbus_monitor.sh &
+
+
 # -----------------------------------------
-echo "setup CAN interface..."
+echo "trying setup CAN interface..."
 echo "NOTE: you may have to edit boot config to enable CAN driver (see https://github.com/owlRobotics-GmbH/owlRobotPlatform)"
 ip link set can0 up type can bitrate 1000000
+retcode=$?
+if [ $retcode -ne 0 ]; then
+  echo "trying CAN-USB-bridge (SLCAN) ..."
+  ls /dev/serial/by-id/usb-Raspberry_Pi_Pico*
+  PICO_DEV=`ls /dev/serial/by-id/usb-Raspberry_Pi_Pico*`
+  echo "PICO_DEV=$PICO_DEV"
+  sudo slcand -o -s8 -t hw -S 3000000 $PICO_DEV
+  sudo ip link set up slcan0
+fi
+#exit
 
 
 # -----------------------------------------
@@ -88,20 +102,25 @@ then
   echo "installing audio player..."
   apt install -y libsox-fmt-mp3 sox mplayer alsa-utils pulseaudio
 fi
+# add root to dialout group
+echo "whoami: $WHOAMI"
+echo "belonging to groups: "
+groups
 # show audio devices
 #aplay -l
 cat /proc/asound/cards
 # restart pulseaudio daemon as root
-killall pulseaudio
-sleep 1
-pulseaudio -D --system --disallow-exit --disallow-module-loading
-#sudo chmod 666 /var/run/pulse/native
-export PULSE_SERVER=unix:/var/run/pulse/native
+#killall pulseaudio
+#sleep 1
+#pulseaudio -D --system --disallow-exit --disallow-module-loading
+#pulseaudio --dump-conf
+# sudo chmod 666 /var/run/pulse/native
 # set default volume 
-amixer -D pulse sset Master 100%
+#adduser root dialout audio pulse-access pulse
+#export PULSE_SERVER=unix:/var/run/pulse/native
 echo "we will test host audio now... (you should hear a voice)"
-mplayer /home/pi/Sunray/tts/de/system_starting.mp3
-#exit    
+../ros/scripts/dbus_send.sh -m Play -p ../tts/de/system_starting.mp3
+
 
 
 echo "----waiting for TCP connections to be closed from previous sessions----"
@@ -126,6 +145,9 @@ echo "----starting sunray ros----"
 #if [ -z "$SUNRAY_ROS_MODE" ]; then
 #  SUNRAY_ROS_MODE=SIMPLE
 #fi
+if [ -z "$USE_BAG_FILE" ]; then
+  USE_BAG_FILE=false
+fi
 if [ -z "$SUNRAY_ROS_LAUNCH" ]; then
   #SUNRAY_ROS_LAUNCH=owlmower.launch
   SUNRAY_ROS_LAUNCH=`grep "ROS_LAUNCH_FILE" ../sunray/config.h | cut -d'"' -f 2`
@@ -138,12 +160,17 @@ echo "sunray_ros_launch: $SUNRAY_ROS_LAUNCH"
 echo "start rviz: $SUNRAY_ROS_RVIZ"
 echo "working dir: $PWD"    
 echo "DISPLAY: $DISPLAY"  
+echo "USE_BAG_FILE: $USE_BAG_FILE"
+echo "BAG_FILE: $BAG_FILE"
+
 
 WCON=$(nmcli c | grep wifi | head -1 | tail -c 12 | xargs )
 echo "WIFI CON: $WCON"
 
 WIP=`ifconfig $WCON | grep 'inet ' | awk -F'[: ]+' '{ print $3 }'`
 echo "WIFI IP: $WIP"
+
+# ROS_IP="$WIP"
 
 # allow non-root to start http server 
 #sudo setcap 'cap_net_bind_service=+ep' devel/lib/sunray_node/sunray_node
@@ -156,9 +183,10 @@ echo "WIFI IP: $WIP"
 xhost +local:* 
 
 # source ROS setup  
-CMD="export PULSE_SERVER=unix:/var/run/pulse/native"
-CMD+="; export DISPLAY=$DISPLAY"
-CMD+="; export ROS_IP=$WIP"
+CMD="export DISPLAY=$DISPLAY"
+if [[ $ROS_IP != "" ]]; then
+  CMD+="; export ROS_IP=$ROS_IP"
+fi 
 CMD+="; export ROS_HOME=/root/Sunray/alfred"
 CMD+="; . /ros_entrypoint.sh"
 CMD+="; rosclean purge -y"
@@ -167,9 +195,13 @@ CMD+="; export ROS_PYTHON_LOG_CONFIG_FILE=/root/Sunray/ros/python_logging.config
 CMD+="  ; cd /root/Sunray/ros"
 CMD+="  ; . devel/setup.bash"
 CMD+="; setcap 'cap_net_bind_service=+ep' devel/lib/sunray_node/sunray_node"
+CMD+="; cp -n -r src/sunray_node/config/camera_info /root/Sunray/alfred"
 CMD+="; cd /root/Sunray/alfred"
 CMD+="; pwd"
-CMD+="; roslaunch sunray_node run.launch sunray_ros_launch:=$SUNRAY_ROS_LAUNCH sunray_ros_mode:=$SUNRAY_ROS_MODE rviz:=$SUNRAY_ROS_RVIZ use_bag_file:=false map_pcd:=/root/PCD/dlio_map.pcd"
+CMD+="; chmod o+x+r+w /root"
+#CMD+="; groupadd -g 1000 pi || true"
+#CMD+="; useradd -g 1000 -u 1000 pi || true"
+CMD+="; roslaunch sunray_node run.launch sunray_ros_launch:=$SUNRAY_ROS_LAUNCH sunray_ros_mode:=$SUNRAY_ROS_MODE rviz:=$SUNRAY_ROS_RVIZ use_bag_file:=$USE_BAG_FILE bag_file:=$BAG_FILE map_pcd:=/root/PCD/dlio_map.pcd"
 docker stop $CONTAINER_NAME && docker start $CONTAINER_NAME && docker exec -t -it $CONTAINER_NAME bash -c "$CMD" 
 
 # rosnode kill -a ; sleep 3

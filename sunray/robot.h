@@ -39,7 +39,7 @@
 #include "timetable.h"
 
 
-#define VER "Sunray,1.0.324"
+#define VER "Sunray,1.0.325"
 
 // operation types
 enum OperationType {
@@ -87,6 +87,7 @@ extern float stateTemp;  // current temperature
 extern float setSpeed; // linear speed (m/s)
 extern int fixTimeout;
 extern bool finishAndRestart; // auto-restart when mowing finished?
+extern bool dockAfterFinish; // dock after mowing finished?
 extern bool absolutePosSource;
 extern double absolutePosSourceLon;
 extern double absolutePosSourceLat;
